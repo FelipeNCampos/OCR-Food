@@ -1,4 +1,6 @@
 import os
+import re
+import unicodedata
 from io import BytesIO
 from typing import Callable, Literal, Optional
 
@@ -25,6 +27,22 @@ class OcrUrlRequest(BaseModel):
 class OcrResponse(BaseModel):
     mode: OcrMode
     text: str
+    execution_time: float
+    language: str
+    spell_corrector: bool
+
+
+class AnalyzeUrlRequest(BaseModel):
+    image_url: HttpUrl
+    language: str = "por"
+    spell_corrector: bool = False
+
+
+class AnalyzeResponse(BaseModel):
+    product_name: Optional[str]
+    product_text: str
+    nutrition_text: str
+    nutrition_lines: list[str]
     execution_time: float
     language: str
     spell_corrector: bool
@@ -89,6 +107,35 @@ def create_app() -> FastAPI:
             show_performance=payload.show_performance,
         )
 
+    @app.post("/analyze", response_model=AnalyzeResponse)
+    async def analyze_food_from_form(
+        file: Optional[UploadFile] = File(default=None),
+        image_url: Optional[str] = Form(default=None),
+        language: str = Form(default="por"),
+        spell_corrector: bool = Form(default=False),
+    ):
+        if file is None and not image_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Envie um arquivo no campo 'file' ou uma URL no campo 'image_url'.",
+            )
+
+        image_input = image_url if image_url else await _read_upload_as_image(file)
+        return await run_in_threadpool(
+            _analyze_food,
+            image_input,
+            language,
+            spell_corrector,
+        )
+
+    @app.post("/analyze/url", response_model=AnalyzeResponse)
+    def analyze_food_from_json(payload: AnalyzeUrlRequest):
+        return _analyze_food(
+            image_input=str(payload.image_url),
+            language=payload.language,
+            spell_corrector=payload.spell_corrector,
+        )
+
     return app
 
 
@@ -142,6 +189,109 @@ def _run_ocr(
         language=language,
         spell_corrector=spell_corrector,
     )
+
+
+def _analyze_food(image_input, language: str, spell_corrector: bool) -> AnalyzeResponse:
+    product_input = _copy_image_if_needed(image_input)
+    table_input = _copy_image_if_needed(image_input)
+
+    product_result = _run_ocr(
+        "product",
+        product_input,
+        language,
+        spell_corrector,
+        False,
+    )
+    table_result = _run_ocr(
+        "table",
+        table_input,
+        language,
+        spell_corrector,
+        False,
+    )
+
+    return AnalyzeResponse(
+        product_name=_guess_product_name(product_result.text),
+        product_text=product_result.text,
+        nutrition_text=table_result.text,
+        nutrition_lines=_extract_nutrition_lines(table_result.text),
+        execution_time=product_result.execution_time + table_result.execution_time,
+        language=language,
+        spell_corrector=spell_corrector,
+    )
+
+
+def _copy_image_if_needed(image_input):
+    if isinstance(image_input, Image.Image):
+        return image_input.copy()
+    return image_input
+
+
+def _guess_product_name(text: str) -> Optional[str]:
+    ignored_patterns = [
+        r"informacao nutricional",
+        r"informacoes nutricionais",
+        r"tabela nutricional",
+        r"ingredientes",
+        r"validade",
+        r"lote",
+        r"fabricado",
+        r"contem",
+        r"nao contem",
+    ]
+
+    for line in _clean_lines(text):
+        normalized = _normalize_text(line)
+        if len(line) < 3:
+            continue
+        if any(re.search(pattern, normalized) for pattern in ignored_patterns):
+            continue
+        if re.search(r"\d+\s*(g|kg|ml|l)\b", normalized):
+            continue
+        return line
+
+    return None
+
+
+def _extract_nutrition_lines(text: str) -> list[str]:
+    nutrient_patterns = [
+        r"valor energetico",
+        r"calorias",
+        r"carboidratos?",
+        r"proteinas?",
+        r"gorduras? totais?",
+        r"gorduras? saturadas?",
+        r"gorduras? trans",
+        r"fibra alimentar",
+        r"sodio",
+        r"acucares?",
+        r"vitaminas?",
+        r"calcio",
+        r"ferro",
+    ]
+
+    lines = []
+    for line in _clean_lines(text):
+        normalized = _normalize_text(line)
+        has_nutrient = any(re.search(pattern, normalized) for pattern in nutrient_patterns)
+        has_amount = re.search(r"\d+[\d,.]*\s*(kcal|kj|g|mg|mcg|%)\b", normalized)
+        if has_nutrient or has_amount:
+            lines.append(line)
+
+    return lines
+
+
+def _clean_lines(text: str) -> list[str]:
+    return [
+        re.sub(r"\s+", " ", line).strip()
+        for line in text.splitlines()
+        if re.sub(r"\s+", " ", line).strip()
+    ]
+
+
+def _normalize_text(text: str) -> str:
+    normalized = unicodedata.normalize("NFKD", text.lower())
+    return normalized.encode("ascii", "ignore").decode("ascii")
 
 
 def _get_ocr_class(mode: OcrMode) -> Callable:
