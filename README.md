@@ -1,4 +1,4 @@
-# Lê apénas rótulos
+# Lê apenas rótulos
 # Nkocr: The OCR tool for nutritional tables
 
 ![Nkocr_logo](https://raw.githubusercontent.com/Lucs1590/Nkocr/master/logo.jpg)
