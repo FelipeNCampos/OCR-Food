@@ -210,11 +210,15 @@ def _analyze_food(image_input, language: str, spell_corrector: bool) -> AnalyzeR
         False,
     )
 
+    combined_nutrition_text = "\n".join(
+        text for text in [table_result.text, product_result.text] if text.strip()
+    )
+
     return AnalyzeResponse(
         product_name=_guess_product_name(product_result.text),
         product_text=product_result.text,
         nutrition_text=table_result.text,
-        nutrition_lines=_extract_nutrition_lines(table_result.text),
+        nutrition_lines=_extract_nutrition_lines(combined_nutrition_text),
         execution_time=product_result.execution_time + table_result.execution_time,
         language=language,
         spell_corrector=spell_corrector,

@@ -1,5 +1,7 @@
 from time import time
 from io import BytesIO
+import cv2
+import numpy as np
 import pytesseract
 
 from PIL import Image
@@ -105,8 +107,7 @@ class OcrProduct:
             str: text extracted from the image.
         """
         image = aux.get_image_from_url(image_url)
-        phrase = pytesseract.image_to_string(
-            Image.open(BytesIO(image.content)), lang=self.lang)
+        phrase = read_text(Image.open(BytesIO(image.content)), self.lang)
         return phrase
 
     def run_path_img_ocr(self, image: str) -> str:
@@ -119,7 +120,7 @@ class OcrProduct:
         Returns:
             str: text extracted from the image.
         """
-        phrase = pytesseract.image_to_string(Image.open(image), lang=self.lang)
+        phrase = read_text(Image.open(image), self.lang)
         return phrase
 
     def run_img_ocr(self, image) -> str:
@@ -132,5 +133,98 @@ class OcrProduct:
         Returns:
             str: text extracted from the image.
         """
-        phrase = pytesseract.image_to_string(image, lang=self.lang)
+        phrase = read_text(image, self.lang)
         return phrase
+
+
+def read_text(image, language: str) -> str:
+    variants = build_image_variants(image)
+    configs = [
+        "--oem 3 --psm 6",
+        "--oem 3 --psm 11",
+        "--oem 3 --psm 4",
+        "--oem 3 --psm 3",
+    ]
+
+    best_text = ""
+    best_score = -1.0
+
+    for variant in variants:
+        for config in configs:
+            text, score = read_text_with_confidence(variant, language, config)
+            if score > best_score and text.strip():
+                best_score = score
+                best_text = text
+
+    return best_text
+
+
+def build_image_variants(image) -> list:
+    if isinstance(image, np.ndarray):
+        cv_image = image.copy()
+    else:
+        cv_image = np.asarray(image.convert("RGB"))[:, :, ::-1]
+
+    cv_image = aux.remove_alpha_channel(cv_image)
+    height, width = cv_image.shape[:2]
+    scale = max(1, int(1600 / max(height, width)))
+    if scale > 1:
+        cv_image = cv2.resize(
+            cv_image,
+            None,
+            fx=scale,
+            fy=scale,
+            interpolation=cv2.INTER_CUBIC,
+        )
+
+    gray = cv2.cvtColor(cv_image, cv2.COLOR_BGR2GRAY)
+    gray = cv2.fastNlMeansDenoising(gray, None, 10, 7, 21)
+    equalized = cv2.equalizeHist(gray)
+    adaptive = cv2.adaptiveThreshold(
+        equalized,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY,
+        31,
+        11,
+    )
+    otsu = cv2.threshold(
+        equalized,
+        0,
+        255,
+        cv2.THRESH_BINARY + cv2.THRESH_OTSU,
+    )[1]
+
+    return [cv_image, gray, equalized, adaptive, otsu]
+
+
+def read_text_with_confidence(image, language: str, config: str) -> tuple:
+    data = pytesseract.image_to_data(
+        image,
+        lang=language,
+        config=config,
+        output_type=pytesseract.Output.DICT,
+    )
+
+    words = []
+    confidences = []
+    for word, confidence in zip(data["text"], data["conf"]):
+        word = word.strip()
+        if not word:
+            continue
+
+        try:
+            confidence_value = float(confidence)
+        except ValueError:
+            continue
+
+        if confidence_value >= 0:
+            words.append(word)
+            confidences.append(confidence_value)
+
+    if not words:
+        return "", -1.0
+
+    text = " ".join(words)
+    score = sum(confidences) / len(confidences)
+    return text, score
