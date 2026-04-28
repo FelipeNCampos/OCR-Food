@@ -246,6 +246,8 @@ def _guess_product_name(text: str) -> Optional[str]:
 
     for line in _clean_lines(text):
         normalized = _normalize_text(line)
+        if not _looks_like_product_text(normalized):
+            continue
         if len(line) < 3:
             continue
         if any(re.search(pattern, normalized) for pattern in ignored_patterns):
@@ -255,6 +257,16 @@ def _guess_product_name(text: str) -> Optional[str]:
         return line
 
     return None
+
+
+def _looks_like_product_text(text: str) -> bool:
+    letters = re.findall(r"[a-z]", text)
+    words = re.findall(r"[a-z]{3,}", text)
+    if len(letters) < 4 or not words:
+        return False
+
+    meaningful_chars = re.findall(r"[a-z0-9 ]", text)
+    return len(meaningful_chars) / max(len(text), 1) >= 0.55
 
 
 def _extract_nutrition_lines(text: str) -> list[str]:
