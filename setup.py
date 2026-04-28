@@ -63,6 +63,9 @@ setup(
     install_requires=[
         'tesseract==0.1.3',
         'pytesseract==0.3.13',
+        'fastapi>=0.115.0',
+        'uvicorn[standard]>=0.32.0',
+        'python-multipart>=0.0.9',
         'requests==2.32.5',
         'wheel>=0.43,<0.47',
         'Pillow>=10.2.0',
